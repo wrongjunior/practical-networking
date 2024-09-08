@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 const (
@@ -19,6 +21,7 @@ const (
 var (
 	peers     = make(map[string]time.Time) // Список IP-адресов живых копий
 	peersLock sync.Mutex                   // Для синхронизации доступа к списку
+	myID      = uuid.New().String()        // Уникальный идентификатор текущей копии
 )
 
 func main() {
@@ -27,8 +30,7 @@ func main() {
 	}
 
 	multicastAddress := os.Args[1]
-
-	fmt.Printf("Запуск программы с multicast-адресом: %s\n", multicastAddress)
+	fmt.Printf("Запуск программы с multicast-адресом: %s, ID копии: %s\n", multicastAddress, myID)
 
 	go receive(multicastAddress)
 	go send(multicastAddress)
@@ -56,11 +58,9 @@ func send(multicastAddress string) {
 	fmt.Println("Отправка сообщений о присутствии...")
 
 	for {
-		_, err := conn.Write([]byte("I'm here"))
+		_, err := conn.Write([]byte(fmt.Sprintf("I'm here, ID: %s", myID)))
 		if err != nil {
 			log.Printf("Ошибка отправки сообщения: %v", err)
-		} else {
-			fmt.Println("Сообщение отправлено")
 		}
 		time.Sleep(interval)
 	}
@@ -92,19 +92,19 @@ func receive(multicastAddress string) {
 		}
 
 		message := strings.TrimSpace(string(buffer[:n]))
-		if message == "I'm here" {
-			fmt.Printf("Получено сообщение от: %s\n", src.IP.String())
-			updatePeer(src.IP.String())
+		if strings.Contains(message, "I'm here") && !strings.Contains(message, myID) {
+			fmt.Printf("Получено сообщение от: %s (%s)\n", src.IP.String(), message)
+			updatePeer(src.IP.String(), message)
 		}
 	}
 }
 
 // Обновление времени активности копии
-func updatePeer(ip string) {
+func updatePeer(ip, id string) {
 	peersLock.Lock()
 	defer peersLock.Unlock()
 
-	peers[ip] = time.Now()
+	peers[ip+" ("+id+")"] = time.Now()
 }
 
 // Проверка и вывод списка живых копий
@@ -130,8 +130,8 @@ func checkAlivePeers() {
 	// Вывод активных копий, если произошли изменения
 	if changed || len(activePeers) > 0 {
 		fmt.Println("Текущие активные копии:")
-		for _, ip := range activePeers {
-			fmt.Printf("- %s (обнаружено: %s назад)\n", ip, now.Sub(peers[ip]).Round(time.Second))
+		for _, peer := range activePeers {
+			fmt.Printf("- %s (обнаружено: %s назад)\n", peer, now.Sub(peers[peer]).Round(time.Second))
 		}
 		fmt.Println("---------------------------")
 	}
