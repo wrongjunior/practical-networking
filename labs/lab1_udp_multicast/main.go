@@ -36,7 +36,7 @@ func main() {
 	// Обновление и вывод списка живых копий
 	for {
 		time.Sleep(1 * time.Second)
-		printAlivePeers()
+		checkAlivePeers()
 	}
 }
 
@@ -107,26 +107,31 @@ func updatePeer(ip string) {
 	peers[ip] = time.Now()
 }
 
-// Печать списка живых копий
-func printAlivePeers() {
+// Проверка и вывод списка живых копий
+func checkAlivePeers() {
 	peersLock.Lock()
 	defer peersLock.Unlock()
 
 	now := time.Now()
 	changed := false
+	var activePeers []string
 
 	// Удаление неактивных копий
 	for ip, lastSeen := range peers {
 		if now.Sub(lastSeen) > expiryDuration {
+			fmt.Printf("Копия %s более неактивна, удаление...\n", ip)
 			delete(peers, ip)
 			changed = true
+		} else {
+			activePeers = append(activePeers, ip)
 		}
 	}
 
-	if changed || len(peers) > 0 {
-		fmt.Println("Текущие живые копии:")
-		for ip := range peers {
-			fmt.Printf("- %s\n", ip)
+	// Вывод активных копий, если произошли изменения
+	if changed || len(activePeers) > 0 {
+		fmt.Println("Текущие активные копии:")
+		for _, ip := range activePeers {
+			fmt.Printf("- %s (обнаружено: %s назад)\n", ip, now.Sub(peers[ip]).Round(time.Second))
 		}
 		fmt.Println("---------------------------")
 	}
