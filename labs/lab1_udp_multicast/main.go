@@ -23,10 +23,12 @@ var (
 
 func main() {
 	if len(os.Args) < 2 {
-		log.Fatal("Usage: go run main.go <multicast-address>")
+		log.Fatal("Использование: go run main.go <multicast-address>")
 	}
 
 	multicastAddress := os.Args[1]
+
+	fmt.Printf("Запуск программы с multicast-адресом: %s\n", multicastAddress)
 
 	go receive(multicastAddress)
 	go send(multicastAddress)
@@ -51,10 +53,14 @@ func send(multicastAddress string) {
 	}
 	defer conn.Close()
 
+	fmt.Println("Отправка сообщений о присутствии...")
+
 	for {
 		_, err := conn.Write([]byte("I'm here"))
 		if err != nil {
 			log.Printf("Ошибка отправки сообщения: %v", err)
+		} else {
+			fmt.Println("Сообщение отправлено")
 		}
 		time.Sleep(interval)
 	}
@@ -75,6 +81,8 @@ func receive(multicastAddress string) {
 
 	conn.SetReadBuffer(1024)
 
+	fmt.Println("Ожидание сообщений от других копий...")
+
 	buffer := make([]byte, 1024)
 	for {
 		n, src, err := conn.ReadFromUDP(buffer)
@@ -85,6 +93,7 @@ func receive(multicastAddress string) {
 
 		message := strings.TrimSpace(string(buffer[:n]))
 		if message == "I'm here" {
+			fmt.Printf("Получено сообщение от: %s\n", src.IP.String())
 			updatePeer(src.IP.String())
 		}
 	}
@@ -114,7 +123,7 @@ func printAlivePeers() {
 		}
 	}
 
-	if changed {
+	if changed || len(peers) > 0 {
 		fmt.Println("Текущие живые копии:")
 		for ip := range peers {
 			fmt.Printf("- %s\n", ip)
