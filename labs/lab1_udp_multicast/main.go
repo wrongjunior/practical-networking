@@ -19,8 +19,8 @@ const (
 )
 
 var (
-	peers     = make(map[string]time.Time) // Карта для хранения информации о других копиях
-	peersLock sync.Mutex                   // Мьютекс для синхронизации доступа к карте peers
+	peers     = make(map[string]time.Time) // Список IP-адресов живых копий
+	peersLock sync.Mutex                   // Для синхронизации доступа к списку
 	myID      = uuid.New().String()        // Уникальный идентификатор текущей копии
 )
 
