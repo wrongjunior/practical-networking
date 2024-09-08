@@ -19,21 +19,39 @@ const (
 )
 
 var (
-	peers     = make(map[string]time.Time) // Список IP-адресов живых копий
-	peersLock sync.Mutex                   // Для синхронизации доступа к списку
+	peers     = make(map[string]time.Time) // Карта для хранения информации о других копиях
+	peersLock sync.Mutex                   // Мьютекс для синхронизации доступа к карте peers
 	myID      = uuid.New().String()        // Уникальный идентификатор текущей копии
 )
 
+// Config хранит конфигурацию приложения
+type Config struct {
+	Protocol         string // Протокол (IPv4 или IPv6)
+	MulticastAddress string // Адрес multicast-группы
+	InterfaceName    string // Имя сетевого интерфейса (для IPv6)
+}
+
 func main() {
-	if len(os.Args) < 2 {
-		log.Fatal("Использование: go run main.go <multicast-address>")
+	config, err := parseArgs()
+	if err != nil {
+		log.Fatalf("Ошибка при разборе аргументов: %v", err)
 	}
 
-	multicastAddress := os.Args[1]
-	fmt.Printf("Запуск программы с multicast-адресом: %s, ID копии: %s\n", multicastAddress, myID)
+	iface, err := getInterface(config)
+	if err != nil {
+		log.Fatalf("Ошибка при получении интерфейса: %v", err)
+	}
 
-	go receive(multicastAddress)
-	go send(multicastAddress)
+	addr, err := net.ResolveUDPAddr("udp", config.MulticastAddress+port)
+	if err != nil {
+		log.Fatalf("Ошибка при разрешении адреса: %v", err)
+	}
+
+	fmt.Printf("Запуск приложения с %s multicast-адресом: %s, интерфейс: %s, ID копии: %s\n",
+		config.Protocol, config.MulticastAddress, config.InterfaceName, myID)
+
+	go receive(addr, iface)
+	go send(addr, iface)
 
 	// Обновление и вывод списка живых копий
 	for {
@@ -42,13 +60,40 @@ func main() {
 	}
 }
 
-// Отправка сообщения о присутствии
-func send(multicastAddress string) {
-	addr, err := net.ResolveUDPAddr("udp", multicastAddress+port)
-	if err != nil {
-		log.Fatalf("Ошибка разрешения адреса: %v", err)
+// parseArgs разбирает аргументы командной строки и возвращает Config
+func parseArgs() (*Config, error) {
+	if len(os.Args) < 2 {
+		return nil, fmt.Errorf("использование: %s <multicast-адрес> [имя-интерфейса]", os.Args[0])
 	}
 
+	config := &Config{
+		MulticastAddress: os.Args[1],
+	}
+
+	if strings.Contains(config.MulticastAddress, ":") {
+		config.Protocol = "ipv6"
+		config.MulticastAddress = "[" + config.MulticastAddress + "]"
+		if len(os.Args) < 3 {
+			return nil, fmt.Errorf("для IPv6 необходимо указать имя интерфейса")
+		}
+		config.InterfaceName = os.Args[2]
+	} else {
+		config.Protocol = "ipv4"
+	}
+
+	return config, nil
+}
+
+// getInterface возвращает сетевой интерфейс для использования
+func getInterface(config *Config) (*net.Interface, error) {
+	if config.Protocol == "ipv6" {
+		return net.InterfaceByName(config.InterfaceName)
+	}
+	return nil, nil
+}
+
+// send отправляет сообщения о присутствии
+func send(addr *net.UDPAddr, iface *net.Interface) {
 	conn, err := net.DialUDP("udp", nil, addr)
 	if err != nil {
 		log.Fatalf("Ошибка при подключении к UDP: %v", err)
@@ -58,7 +103,7 @@ func send(multicastAddress string) {
 	fmt.Println("Отправка сообщений о присутствии...")
 
 	for {
-		_, err := conn.Write([]byte(fmt.Sprintf("I'm here, ID: %s", myID)))
+		_, err := conn.Write([]byte(fmt.Sprintf("Я здесь, ID: %s", myID)))
 		if err != nil {
 			log.Printf("Ошибка отправки сообщения: %v", err)
 		}
@@ -66,14 +111,9 @@ func send(multicastAddress string) {
 	}
 }
 
-// Прием сообщений от других копий
-func receive(multicastAddress string) {
-	addr, err := net.ResolveUDPAddr("udp", multicastAddress+port)
-	if err != nil {
-		log.Fatalf("Ошибка разрешения адреса: %v", err)
-	}
-
-	conn, err := net.ListenMulticastUDP("udp", nil, addr)
+// receive принимает сообщения от других копий
+func receive(addr *net.UDPAddr, iface *net.Interface) {
+	conn, err := net.ListenMulticastUDP("udp", iface, addr)
 	if err != nil {
 		log.Fatalf("Ошибка при подключении к multicast: %v", err)
 	}
@@ -92,14 +132,14 @@ func receive(multicastAddress string) {
 		}
 
 		message := strings.TrimSpace(string(buffer[:n]))
-		if strings.Contains(message, "I'm here") && !strings.Contains(message, myID) {
+		if strings.Contains(message, "Я здесь") && !strings.Contains(message, myID) {
 			fmt.Printf("Получено сообщение от: %s (%s)\n", src.IP.String(), message)
 			updatePeer(src.IP.String(), message)
 		}
 	}
 }
 
-// Обновление времени активности копии
+// updatePeer обновляет время последнего обнаружения для копии
 func updatePeer(ip, id string) {
 	peersLock.Lock()
 	defer peersLock.Unlock()
@@ -107,7 +147,7 @@ func updatePeer(ip, id string) {
 	peers[ip+" ("+id+")"] = time.Now()
 }
 
-// Проверка и вывод списка живых копий
+// checkAlivePeers проверяет и выводит список активных копий
 func checkAlivePeers() {
 	peersLock.Lock()
 	defer peersLock.Unlock()
@@ -116,10 +156,9 @@ func checkAlivePeers() {
 	changed := false
 	var activePeers []string
 
-	// Удаление неактивных копий
 	for ip, lastSeen := range peers {
 		if now.Sub(lastSeen) > expiryDuration {
-			fmt.Printf("Копия %s более неактивна, удаление...\n", ip)
+			fmt.Printf("Копия %s больше не активна, удаляем...\n", ip)
 			delete(peers, ip)
 			changed = true
 		} else {
@@ -127,11 +166,10 @@ func checkAlivePeers() {
 		}
 	}
 
-	// Вывод активных копий, если произошли изменения
 	if changed || len(activePeers) > 0 {
 		fmt.Println("Текущие активные копии:")
 		for _, peer := range activePeers {
-			fmt.Printf("- %s (обнаружено: %s назад)\n", peer, now.Sub(peers[peer]).Round(time.Second))
+			fmt.Printf("- %s (последнее обнаружение: %s назад)\n", peer, now.Sub(peers[peer]).Round(time.Second))
 		}
 		fmt.Println("---------------------------")
 	}
